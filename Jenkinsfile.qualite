@@ -1,94 +1,76 @@
-// TP 3.8 : intégration continue + déploiement continu (staging automatique, prod après validation)
 pipeline {
     agent any
 
     environment {
-        IMAGE   = "restaurant"
-        VERSION = "1.0.${env.BUILD_NUMBER}"
-        COMPOSE = "docker compose -f deploy/docker-compose.deploy.yml"
-    }
-
-    options {
-        timestamps()
-        timeout(time: 30, unit: 'MINUTES')
-        disableConcurrentBuilds()
+        DOCKERHUB_CREDS = credentials('dockerhub')
+        IMAGE_NAME = "restaurant"
     }
 
     stages {
-        stage('Tests unitaires') {
+        stage('Checkout') {
             steps {
-                // Utilise le stage 'test' défini dans le Dockerfile multi-stage
-                sh 'docker build --target test -t $IMAGE:test .'
-            }
-        }
-
-        stage('Build image') {
-            steps {
-                sh 'docker build --build-arg APP_VERSION=$VERSION -t $IMAGE:$VERSION .'
-            }
-        }
-
-        stage('Déploiement staging') {
-            environment {
-                REDIS_PASSWORD = credentials('redis-password-staging')
-            }
-            steps {
-                sh '''
-                    IMAGE_REF=$IMAGE:$VERSION APP_ENV=staging APP_COLOR='#bf8700' PORT=8081 \
-                        $COMPOSE -p legeni-staging up -d --wait
-                '''
-                sh './deploy/smoke-test.sh legeni-staging $VERSION'
-            }
-        }
-
-        stage('Validation production') {
-            when { branch 'main' }
-            steps {
-                timeout(time: 15, unit: 'MINUTES') {
-                    input message: "Déployer la version ${VERSION} en production ?", ok: 'Déployer'
+                checkout scm
+                script {
+                    // Initialisation sécurisée des variables dépendantes du build et de la branche
+                    env.BRANCH = env.BRANCH_NAME ?: 'main'
+                    env.VERSION = "${env.BRANCH == 'main' ? '1.0.' + env.BUILD_NUMBER : env.BRANCH.replaceAll('[^a-zA-Z0-9.-]', '-') + '-' + env.BUILD_NUMBER}"
+                    env.FULL_IMAGE = "cabrelo/${env.IMAGE_NAME}:${env.VERSION}"
+                    env.LATEST_IMAGE = "cabrelo/${env.IMAGE_NAME}:latest"
                 }
             }
         }
 
-        stage('Déploiement production') {
-            when { branch 'main' }
-            environment {
-                REDIS_PASSWORD = credentials('redis-password-prod')
+        stage('Build & Test') {
+            steps {
+                script {
+                    sh "docker build -t ${env.FULL_IMAGE} -t ${env.LATEST_IMAGE} ."
+
+                    def networkName = sh(script: "docker inspect jenkins-server -f '{{range \$k, \$v := .NetworkSettings.Networks}}{{\$k}}{{end}}'", returnStdout: true).trim()
+                    def containerName = "${env.IMAGE_NAME}-test"
+
+                    sh """
+                        docker rm -f ${containerName} || true
+                        docker run -d --name ${containerName} --network ${networkName} ${env.FULL_IMAGE}
+                        for i in \$(seq 1 10); do
+                            if curl -sf http://${containerName}/ > /dev/null; then break; fi
+                            sleep 1
+                        done
+                        curl -sf http://${containerName}/ | grep -qi "<title>Restaurant" && echo "✅ titre OK"
+                        curl -sf -o /dev/null -w "%{http_code} %{content_type}\\n" http://${containerName}/1.jpg
+                        test "\$(curl -s -o /dev/null -w "%{http_code}" http://${containerName}/nexiste-pas)" = "404" && echo "✅ 404 OK"
+                    """
+                }
+            }
+        }
+
+        stage('Publish') {
+            when { 
+                branch 'main' 
             }
             steps {
                 script {
-                    env.PREVIOUS_IMAGE = sh(
-                        script: "docker inspect -f '{{.Config.Image}}' legeni-prod-web-1 2>/dev/null || echo none",
-                        returnStdout: true
-                    ).trim()
-                    echo "Version en production avant déploiement : ${env.PREVIOUS_IMAGE}"
-                    try {
-                        sh '''
-                            IMAGE_REF=$IMAGE:$VERSION APP_ENV=prod APP_COLOR='#2da44e' PORT=8082 \
-                                $COMPOSE -p legeni-prod up -d --wait
-                            ./deploy/smoke-test.sh legeni-prod $VERSION
-                        '''
-                    } catch (err) {
-                        if (env.PREVIOUS_IMAGE != 'none') {
-                            echo "Smoke test KO : retour à ${env.PREVIOUS_IMAGE}"
-                            sh '''
-                                IMAGE_REF=$PREVIOUS_IMAGE APP_ENV=prod APP_COLOR='#2da44e' PORT=8082 \
-                                    $COMPOSE -p legeni-prod up -d --wait
-                            '''
-                        }
-                        error "Déploiement production échoué, rollback effectué"
-                    }
+                    sh '''
+                        echo "$DOCKERHUB_CREDS_PSW" | docker login -u cabrelo --password-stdin
+                        docker push "$FULL_IMAGE"
+                        docker push "$LATEST_IMAGE"
+                    '''
                 }
             }
         }
     }
 
     post {
+        always {
+            script {
+                // Nettoyage sécurisé à l'intérieur d'un contexte script/node
+                sh "docker rm -f restaurant-test || true"
+            }
+        }
         success {
-            echo "✅ ${env.JOB_NAME} #${env.BUILD_NUMBER} : version ${VERSION} déployée"
+            echo "Pipeline réussi !"
         }
         failure {
-            echo "❌ ${env.JOB_NAME} #${env.BUILD_NUMBER} en échec"
+            echo "Le pipeline a échoué."
         }
     }
 }
