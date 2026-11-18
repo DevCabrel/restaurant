@@ -2,7 +2,7 @@ pipeline {
     agent any
 
     parameters {
-        string(name: 'DOCKERHUB_ID', defaultValue: 'devcabrel', description: 'Identifiant Docker Hub (en minuscules)')
+        string(name: 'DOCKERHUB_ID', defaultValue: 'cabrelo', description: 'Identifiant Docker Hub')
         string(name: 'IMAGE_NAME', defaultValue: 'restaurant', description: 'Nom de l image Docker')
         string(name: 'IMAGE_TAG', defaultValue: '1.0', description: 'Version de base de l image')
     }
