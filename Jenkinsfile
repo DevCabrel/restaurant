@@ -1,14 +1,11 @@
 pipeline {
     agent any
 
-    parameters {
-        string(name: 'DOCKERHUB_ID', defaultValue: 'cabrelo', description: 'Identifiant Docker Hub')
-        string(name: 'IMAGE_NAME', defaultValue: 'restaurant', description: 'Nom de l image Docker')
-        string(name: 'IMAGE_TAG', defaultValue: '1.0', description: 'Version de base de l image')
-    }
-
     environment {
         DOCKERHUB_CREDS = credentials('dockerhub')
+        // Génère un tag propre selon la branche (ex: 1.0.5 sur main, ou feature-couleur-1 sur une branche)
+        VERSION = "${env.BRANCH_NAME == 'main' ? '1.0.' + env.BUILD_NUMBER : env.BRANCH_NAME.replaceAll('[^a-zA-Z0-9.-]', '-') + '-' + env.BUILD_NUMBER}"
+        IMAGE_NAME = "restaurant"
     }
 
     stages {
@@ -21,21 +18,18 @@ pipeline {
         stage('Build & Test') {
             steps {
                 script {
-                    def shortCommit = sh(script: 'git rev-parse --short HEAD', returnStdout: true).trim()
-                    def fullCommit = sh(script: 'git rev-parse HEAD', returnStdout: true).trim()
-                    env.VERSIONED_IMAGE = "${params.DOCKERHUB_ID}/${params.IMAGE_NAME}:${params.IMAGE_TAG}.${env.BUILD_NUMBER}-${shortCommit}"
-                    env.LATEST_IMAGE = "${params.DOCKERHUB_ID}/${params.IMAGE_NAME}:latest"
+                    env.FULL_IMAGE = "cabrelo/${env.IMAGE_NAME}:${env.VERSION}"
+                    env.LATEST_IMAGE = "cabrelo/${env.IMAGE_NAME}:latest"
 
-                    sh """
-                        docker build --label org.opencontainers.image.revision=${fullCommit} -t ${env.VERSIONED_IMAGE} -t ${env.LATEST_IMAGE} -t ${params.IMAGE_NAME}:${params.IMAGE_TAG} .
-                    """
+                    sh "docker build -t ${env.FULL_IMAGE} -t ${env.LATEST_IMAGE} ."
 
+                    // Tests automatisés (identiques au TP précédent)
                     def networkName = sh(script: "docker inspect jenkins-server -f '{{range \$k, \$v := .NetworkSettings.Networks}}{{\$k}}{{end}}'", returnStdout: true).trim()
-                    def containerName = "${params.IMAGE_NAME}-test"
+                    def containerName = "${env.IMAGE_NAME}-test"
 
                     sh """
                         docker rm -f ${containerName} || true
-                        docker run -d --name ${containerName} --network ${networkName} ${env.VERSIONED_IMAGE}
+                        docker run -d --name ${containerName} --network ${networkName} ${env.FULL_IMAGE}
                         for i in \$(seq 1 10); do
                             if curl -sf http://${containerName}/ > /dev/null; then break; fi
                             sleep 1
@@ -49,25 +43,30 @@ pipeline {
         }
 
         stage('Publish') {
+            when { 
+                branch 'main' // Publication uniquement sur la branche main !
+            }
             steps {
-                sh '''
-                    echo "$DOCKERHUB_CREDS_PSW" | docker login -u "$DOCKERHUB_CREDS_USR" --password-stdin
-                    docker push "$VERSIONED_IMAGE"
-                    docker push "$LATEST_IMAGE"
-                '''
+                script {
+                    sh '''
+                        echo "$DOCKERHUB_CREDS_PSW" | docker login -u cabrelo --password-stdin
+                        docker push "$FULL_IMAGE"
+                        docker push "$LATEST_IMAGE"
+                    '''
+                }
             }
         }
     }
 
     post {
         always {
-            sh "docker rm -f ${params.IMAGE_NAME}-test || true"
+            sh "docker rm -f restaurant-test || true"
         }
         success {
-            echo "Pipeline réussi ! Image publiée : ${env.VERSIONED_IMAGE}"
+            echo "Pipeline réussi sur la branche ${env.BRANCH_NAME} !"
         }
         failure {
-            echo "Le pipeline a échoué. Aucune image validée n'a été publiée."
+            echo "Le pipeline a échoué sur ${env.BRANCH_NAME}."
         }
     }
 }
