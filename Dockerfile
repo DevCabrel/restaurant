@@ -1,3 +1,11 @@
+FROM alpine:3.19 AS test
+WORKDIR /app
+COPY . .
+RUN test -f index.html && echo "✅ index.html trouvé"
+
+FROM nginx:alpine-slim
+COPY . /usr/share/nginx/html
+EXPOSE 80
 FROM ubuntu:24.04
 LABEL maintainer="Legeni"
 RUN apt-get update
