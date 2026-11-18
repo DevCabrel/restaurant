@@ -1,72 +1,92 @@
+// TP 3.8 : intégration continue + déploiement continu (staging automatique, prod après validation)
 pipeline {
     agent any
 
     environment {
-        DOCKERHUB_CREDS = credentials('dockerhub')
-        // Génère un tag propre selon la branche (ex: 1.0.5 sur main, ou feature-couleur-1 sur une branche)
-        VERSION = "${env.BRANCH_NAME == 'main' ? '1.0.' + env.BUILD_NUMBER : env.BRANCH_NAME.replaceAll('[^a-zA-Z0-9.-]', '-') + '-' + env.BUILD_NUMBER}"
-        IMAGE_NAME = "restaurant"
+        IMAGE   = "restaurant"
+        VERSION = "1.0.${env.BUILD_NUMBER}"
+    }
+
+    options {
+        timestamps()
+        timeout(time: 30, unit: 'MINUTES')
+        disableConcurrentBuilds()
     }
 
     stages {
-        stage('Checkout') {
+        stage('Tests unitaires') {
             steps {
-                checkout scm
+                sh 'docker build --target test -t $IMAGE:test .'
             }
         }
 
-        stage('Build & Test') {
+        stage('Build image') {
             steps {
-                script {
-                    env.FULL_IMAGE = "cabrelo/${env.IMAGE_NAME}:${env.VERSION}"
-                    env.LATEST_IMAGE = "cabrelo/${env.IMAGE_NAME}:latest"
+                sh 'docker build --build-arg APP_VERSION=$VERSION -t $IMAGE:$VERSION .'
+            }
+        }
 
-                    sh "docker build -t ${env.FULL_IMAGE} -t ${env.LATEST_IMAGE} ."
+        stage('Déploiement staging') {
+            environment {
+                REDIS_PASSWORD = credentials('redis-password-staging')
+            }
+            steps {
+                sh '''
+                    IMAGE_REF=$IMAGE:$VERSION APP_ENV=staging APP_COLOR='#bf8700' PORT=8081 \
+                        docker compose -f deploy/docker-compose.deploy.yml -p legeni-staging up -d --wait
+                '''
+                sh './deploy/smoke-test.sh legeni-staging $VERSION'
+            }
+        }
 
-                    // Tests automatisés (identiques au TP précédent)
-                    def networkName = sh(script: "docker inspect jenkins-server -f '{{range \$k, \$v := .NetworkSettings.Networks}}{{\$k}}{{end}}'", returnStdout: true).trim()
-                    def containerName = "${env.IMAGE_NAME}-test"
-
-                    sh """
-                        docker rm -f ${containerName} || true
-                        docker run -d --name ${containerName} --network ${networkName} ${env.FULL_IMAGE}
-                        for i in \$(seq 1 10); do
-                            if curl -sf http://${containerName}/ > /dev/null; then break; fi
-                            sleep 1
-                        done
-                        curl -sf http://${containerName}/ | grep -qi "<title>Restaurant" && echo "✅ titre OK"
-                        curl -sf -o /dev/null -w "%{http_code} %{content_type}\\n" http://${containerName}/1.jpg
-                        test "\$(curl -s -o /dev/null -w "%{http_code}" http://${containerName}/nexiste-pas)" = "404" && echo "✅ 404 OK"
-                    """
+        stage('Validation production') {
+            when { branch 'main' }
+            steps {
+                timeout(time: 15, unit: 'MINUTES') {
+                    input message: "Déployer la version ${VERSION} en production ?", ok: 'Déployer'
                 }
             }
         }
 
-        stage('Publish') {
-            when { 
-                branch 'main' // Publication uniquement sur la branche main !
+        stage('Déploiement production') {
+            when { branch 'main' }
+            environment {
+                REDIS_PASSWORD = credentials('redis-password-prod')
             }
             steps {
                 script {
-                    sh '''
-                        echo "$DOCKERHUB_CREDS_PSW" | docker login -u cabrelo --password-stdin
-                        docker push "$FULL_IMAGE"
-                        docker push "$LATEST_IMAGE"
-                    '''
+                    env.PREVIOUS_IMAGE = sh(
+                        script: "docker inspect -f '{{.Config.Image}}' legeni-prod-web-1 2>/dev/null || echo none",
+                        returnStdout: true
+                    ).trim()
+                    echo "Version en production avant déploiement : ${env.PREVIOUS_IMAGE}"
+                    try {
+                        sh '''
+                            IMAGE_REF=$IMAGE:$VERSION APP_ENV=prod APP_COLOR='#2da44e' PORT=8082 \
+                                docker compose -f deploy/docker-compose.deploy.yml -p legeni-prod up -d --wait
+                            ./deploy/smoke-test.sh legeni-prod $VERSION
+                        '''
+                    } catch (err) {
+                        if (env.PREVIOUS_IMAGE != 'none') {
+                            echo "Smoke test KO : retour à ${env.PREVIOUS_IMAGE}"
+                            sh '''
+                                IMAGE_REF=$PREVIOUS_IMAGE APP_ENV=prod APP_COLOR='#2da44e' PORT=8082 \
+                                    docker compose -f deploy/docker-compose.deploy.yml -p legeni-prod up -d --wait
+                            '''
+                        }
+                        error "Déploiement production échoué, rollback effectué"
+                    }
                 }
             }
         }
     }
 
     post {
-        always {
-            sh "docker rm -f restaurant-test || true"
-        }
         success {
-            echo "Pipeline réussi sur la branche ${env.BRANCH_NAME} !"
+            echo "✅ ${env.JOB_NAME} #${env.BUILD_NUMBER} : version ${VERSION} déployée"
         }
         failure {
-            echo "Le pipeline a échoué sur ${env.BRANCH_NAME}."
+            echo "❌ ${env.JOB_NAME} #${env.BUILD_NUMBER} en échec"
         }
     }
 }
