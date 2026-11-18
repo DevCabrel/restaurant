@@ -5,6 +5,8 @@ pipeline {
     environment {
         IMAGE   = "restaurant"
         VERSION = "1.0.${env.BUILD_NUMBER}"
+        // Utilise l'image officielle Docker Compose pour s'affranchir des problèmes d'installation dans Jenkins
+        COMPOSE = "docker run --rm -v /var/run/docker.sock:/var/run/docker.sock -v ${WORKSPACE}:${WORKSPACE} -w ${WORKSPACE} docker/compose:v2.24.0"
     }
 
     options {
@@ -33,7 +35,7 @@ pipeline {
             steps {
                 sh '''
                     IMAGE_REF=$IMAGE:$VERSION APP_ENV=staging APP_COLOR='#bf8700' PORT=8081 \
-                        docker-compose -f deploy/docker-compose.deploy.yml -p legeni-staging up -d --wait
+                        $COMPOSE -f deploy/docker-compose.deploy.yml -p legeni-staging up -d --wait
                 '''
                 sh './deploy/smoke-test.sh legeni-staging $VERSION'
             }
@@ -63,7 +65,7 @@ pipeline {
                     try {
                         sh '''
                             IMAGE_REF=$IMAGE:$VERSION APP_ENV=prod APP_COLOR='#2da44e' PORT=8082 \
-                                docker-compose -f deploy/docker-compose.deploy.yml -p legeni-prod up -d --wait
+                                $COMPOSE -f deploy/docker-compose.deploy.yml -p legeni-prod up -d --wait
                             ./deploy/smoke-test.sh legeni-prod $VERSION
                         '''
                     } catch (err) {
@@ -71,7 +73,7 @@ pipeline {
                             echo "Smoke test KO : retour à ${env.PREVIOUS_IMAGE}"
                             sh '''
                                 IMAGE_REF=$PREVIOUS_IMAGE APP_ENV=prod APP_COLOR='#2da44e' PORT=8082 \
-                                    docker-compose -f deploy/docker-compose.deploy.yml -p legeni-prod up -d --wait
+                                    $COMPOSE -f deploy/docker-compose.deploy.yml -p legeni-prod up -d --wait
                             '''
                         }
                         error "Déploiement production échoué, rollback effectué"
