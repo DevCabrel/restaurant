@@ -1,0 +1,49 @@
+<!DOCTYPE html><html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>nouveau</title>
+</head>
+<body>
+        <form id="contact_form">
+                <input type="text" name="nom" placeholder="Votre nom" required id="regnom"><br>
+                <input type="text" name="prenom" placeholder="Votre prenom" required id="regprenom"><br>
+                <input type="text" name="genre" placeholder="votre genre" required id="reggenre"><br>
+                <input type="text" name="pays" placeholder="Votre pays" required id="regpays"><br>
+                <input type="text" name="ville" placeholder="Votre ville" required id="regville"><br>
+                <input type="text" name="telephone" placeholder="Votre numero de telephone" required id="regtelephone"><br>
+                <input type="email" name="email" placeholder="Votre email" required id="regemail"><br>
+                <textarea name="message" rows="text" placeholder="Votre message" required></textarea><br>
+                <input type="password" name="password" placeholder="mot de pass" required id="regpassword"><br>
+                <input type="text" name="confirmer" placeholder="confirmer" required id="regconfirmer"><br>
+                <input type="submit" value= "submit"><br>
+                <input type="reset" value= "reset">
+            </form>
+    <script>
+        document.getElementById('contact_form').addEventListener('submit', function(event){
+            event.preventDefault();
+        const nom = document.getElementById('regnom').value;
+        const prenom = document.getElementById('regprenom').value;
+        //const genre=document.getElementById('reggenre').value;
+        // const pays=document.getElementById('regpays').value;
+        //const ville=document.getElementById('regville').value;
+        //const telephone=document.getElementById('regtelephone').value;//
+        const email = document.getElementById('regemail').value;
+        const password = document.getElementById('regpassword').value;
+        const confirmer = document.getElementById('regconfirmer').value;
+    
+    if( nom && prenom && email && password && confirmer){
+        if(password === confirmer){
+            alert('registration succesful');
+            document.getElementById('contact_form').reset();
+        } else{
+            alert('password do not match');
+        }
+        }
+        else{
+            alert('please fill all fields');
+        }
+    });
+    </script>
+</body>
+</html>
